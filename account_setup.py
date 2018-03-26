@@ -25,19 +25,10 @@ class Defaults:
 
 def call_shell(commands):
     command = ' '.join(str(x) for x in commands)
-    cmd = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).wait()
+    cmd = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+    out, errs = cmd.communicate()
     returncode = cmd.returncode
-    stdout = ''.join(s.decode("utf-8") for s in cmd.stdout)
-
-    print('command output - returncode: {}, stdout: {}'.format(returncode, stdout))
-
-    #test code
-    #print("Running command {}".format(command))
-    #returncode = 0
-    #stdout = ''
-
-    return returncode, stdout
-
+    return returncode, out.decode("utf-8")
 
 def setup_parsers(parser):
     subparsers = parser.add_subparsers(dest='subparser_name',
@@ -81,7 +72,7 @@ def setup_init_parser(subparsers):
 
 def setup_shared_key_secrets_parser(subparsers):
     sk_secrets_parser = subparsers.add_parser('get-shared-key-secrets',
-                                                help="A command to generate your secrets file using shared-key auth.")
+                                              help="A command to generate your secrets file using shared-key auth.")
     sk_secrets_parser.add_argument('-rg',
                             default=Defaults.resource_group,
                             dest='resource_group',
@@ -124,7 +115,6 @@ def setup_aad_secrets_parser(subparsers):
                             help='Storage account name. Default = ["{}"]'.format(Defaults.storage_account))
 
 def parse_sp_user_output(return_code, data):
-    print('return code is: {}'.format(return_code))
     if (return_code > 0):
         print('There was an error creating the Service Principal. Aborting.\
         Resource may have been created but will not be charged for unless used.')
@@ -153,11 +143,21 @@ def parse_create_batch_account_output(return_code, data):
     return json.loads(data)
 
 def build_secrets_with_aad(aad_data, batch_data, storage_data):
+    password = '[YOUR_AAD_USER_PASSWORD]'
+    if 'password' in aad_data:
+        password = str(aad_data['password'])
+
+    tenant_id = '[YOUR_AAD_TENATN_ID]'
+    if 'tenant' in aad_data:
+        tenant_id = str(aad_data['tenant'])
+    elif 'appOwnerTenantId' in aad_data['additionalProperties']:
+        tenant_id = str(aad_data['additionalProperties']['appOwnerTenantId'])
+
     data = dict(
         service_principal = dict(
-            tenant_id = str(aad_data['tenant']),
+            tenant_id = tenant_id,
             client_id = str(aad_data['appId']),
-            credential = str(aad_data['password']),
+            credential = password,
             batch_account_resource_id = str(batch_data['id']),
             storage_account_resource_id = str(storage_data['id'])
         ),
@@ -186,10 +186,15 @@ def create_aad_user(args):
     if aad_user_result_code == 0:
         # user exists
         print('AAD user {} already exists. Collecting required information'.format(args.aad_name))
+        print(bcolors.WARNING + "Warning: The user you requested already exists. This script will reuse it. \
+The password is not stored so we cannot access it again. Please replace the 'credential' section of the file \
+with your password. More information on regenerating a password for a user can be found here: https://docs.microsoft.com/en-us/cli/azure/create-an-azure-service-principal-azure-cli?view=azure-cli-latest#reset-credentials" + bcolors.ENDC)
         aad_user = parse_sp_user_output(aad_user_result_code, aad_user_result_data)
     else:
         # build and run the service principal commands
         print('Creating AAD user {}'.format(args.aad_name))
+        print(bcolors.WARNING + "Warning: The credentials will only be shown here once and are not stored. \
+Make sure to copy this some place safe as they cannot be regenerated " + bcolors.ENDC)
         commands = []
         commands.append('az')
         commands.append('ad')
@@ -206,9 +211,7 @@ def create_aad_user(args):
         aad_user = parse_sp_user_output(aad_user_result_code, aad_user_result_data)
     return aad_user
 
-def process_init_command(args):
-    create_aad_user(args)
-
+def create_resource_group(args):
     # build and run the resource group commands
     commands = []
     commands.append('az')
@@ -224,6 +227,7 @@ def process_init_command(args):
     code, data = call_shell(commands)
     resource_group = parse_create_resource_group_output(code, data)
 
+def create_storage_account(args):
     # build and run the storage account commands
     commands = []
     commands.append('az')
@@ -243,7 +247,9 @@ def process_init_command(args):
     print('Creating Storage account {}'.format(args.storage_account))
     code, data = call_shell(commands)
     storage_account = parse_create_storage_account_output(code, data)
+    return storage_account
 
+def create_batch_account(args):
     # build and run the batch account commands
     commands = []
     commands.append('az')
@@ -264,12 +270,26 @@ def process_init_command(args):
     code, data = call_shell(commands)
     batch_account = parse_create_batch_account_output(code, data)
 
+def process_init_command(args):
+    aad_user = create_aad_user(args)
+    if aad_user is None:
+        return
+
+    resource_group = create_resource_group(args)
+    if resource_group is None:
+        return
+
+    storage_account = create_storage_account(args)
+    if storage_account is None:
+        return
+
+    batch_account = create_batch_account(args)
+    if batch_account is None:
+        return
+
     # generage the secrets.yaml file
     print()
     secrets_file = build_secrets_with_aad(aad_user, batch_account, storage_account)
-
-    print(bcolors.WARNING + "Warning: The credentials will only be shown here once and are not stored.\
-Make sure to copy this some place safe as they cannot be regenerated " + bcolors.ENDC)
     print('Copy the following text into you secrets.yaml file:\n')
     print(secrets_file)
 

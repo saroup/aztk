@@ -29,6 +29,8 @@ def call_shell(commands):
     returncode = cmd.returncode
     stdout = ''.join(s.decode("utf-8") for s in cmd.stdout)
 
+    print('command output - returncode: {}, stdout: {}'.format(returncode, stdout))
+
     #test code
     #print("Running command {}".format(command))
     #returncode = 0
@@ -122,6 +124,7 @@ def setup_aad_secrets_parser(subparsers):
                             help='Storage account name. Default = ["{}"]'.format(Defaults.storage_account))
 
 def parse_create_sp_user_output(return_code, data):
+    print('return code is: {}'.format(return_code))
     if (return_code > 0):
         print('There was an error creating the Service Principal. Aborting.\
         Resource may have been created but will not be charged for unless used.')

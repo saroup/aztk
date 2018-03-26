@@ -123,7 +123,7 @@ def setup_aad_secrets_parser(subparsers):
                             dest='storage_account',
                             help='Storage account name. Default = ["{}"]'.format(Defaults.storage_account))
 
-def parse_create_sp_user_output(return_code, data):
+def parse_sp_user_output(return_code, data):
     print('return code is: {}'.format(return_code))
     if (return_code > 0):
         print('There was an error creating the Service Principal. Aborting.\
@@ -170,23 +170,44 @@ def build_secrets_with_aad(aad_data, batch_data, storage_data):
     secrets_file = yaml.dump(data, default_flow_style=False)
     return secrets_file
 
-def process_init_command(args):
-    # build and run the service principal commands
+def create_aad_user(args):
+    # check if user exists, if so do not create.
+    aad_user = {};
     commands = []
     commands.append('az')
     commands.append('ad')
     commands.append('sp')
-    commands.append('create-for-rbac')
-    commands.append('-n')
-    commands.append(args.aad_name)
-    if args.aad_password is not None:
-        commands.append('-p')
-        commands.append(args.aad_password)
+    commands.append('show')
+    commands.append('--id')
+    commands.append('http://{}'.format(args.aad_name))
     commands.append('-o')
     commands.append('json')
-    print('Creating AAD user {}'.format(args.aad_name))
     aad_user_result_code, aad_user_result_data = call_shell(commands)
-    aad_user = parse_create_sp_user_output(aad_user_result_code, aad_user_result_data)
+    if aad_user_result_code == 0:
+        # user exists
+        print('AAD user {} already exists. Collecting required information'.format(args.aad_name))
+        aad_user = parse_sp_user_output(aad_user_result_code, aad_user_result_data)
+    else:
+        # build and run the service principal commands
+        print('Creating AAD user {}'.format(args.aad_name))
+        commands = []
+        commands.append('az')
+        commands.append('ad')
+        commands.append('sp')
+        commands.append('create-for-rbac')
+        commands.append('-n')
+        commands.append(args.aad_name)
+        if args.aad_password is not None:
+            commands.append('-p')
+            commands.append(args.aad_password)
+        commands.append('-o')
+        commands.append('json')
+        aad_user_result_code, aad_user_result_data = call_shell(commands)
+        aad_user = parse_create_sp_user_output(aad_user_result_code, aad_user_result_data)
+    return aad_user
+
+def process_init_command(args):
+    create_aad_user(args)
 
     # build and run the resource group commands
     commands = []

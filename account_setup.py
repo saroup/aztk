@@ -147,7 +147,7 @@ def build_secrets_with_aad(aad_data, batch_data, storage_data):
     if 'password' in aad_data:
         password = str(aad_data['password'])
 
-    tenant_id = '[YOUR_AAD_TENATN_ID]'
+    tenant_id = '[YOUR_AAD_TENANT_ID]'
     if 'tenant' in aad_data:
         tenant_id = str(aad_data['tenant'])
     elif 'appOwnerTenantId' in aad_data['additionalProperties']:
@@ -294,7 +294,6 @@ def process_init_command(args):
     secrets_file = build_secrets_with_aad(aad_user, batch_account, storage_account)
     print('Copy the following text into you secrets.yaml file:\n')
     print(secrets_file)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Setup AZTK environment')

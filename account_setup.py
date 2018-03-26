@@ -186,9 +186,9 @@ def create_aad_user(args):
     if aad_user_result_code == 0:
         # user exists
         print('AAD user {} already exists. Collecting required information'.format(args.aad_name))
-        print(bcolors.WARNING + "Warning: The user you requested already exists. This script will reuse it. \
+        print(bcolors.WARNING + "Warning: The user you requested already exists and this script will reuse it. \
 The password is not stored so we cannot access it again. Please replace the 'credential' section of the file \
-with your password. More information on regenerating a password for a user can be found here: https://docs.microsoft.com/en-us/cli/azure/create-an-azure-service-principal-azure-cli?view=azure-cli-latest#reset-credentials" + bcolors.ENDC)
+with your password. More information on resetting a password for a user can be found here: https://docs.microsoft.com/en-us/cli/azure/create-an-azure-service-principal-azure-cli?view=azure-cli-latest#reset-credentials" + bcolors.ENDC)
         aad_user = parse_sp_user_output(aad_user_result_code, aad_user_result_data)
     else:
         # build and run the service principal commands
@@ -226,6 +226,7 @@ def create_resource_group(args):
     print('Creating Resource group {}'.format(args.resource_group))
     code, data = call_shell(commands)
     resource_group = parse_create_resource_group_output(code, data)
+    return resource_group
 
 def create_storage_account(args):
     # build and run the storage account commands
@@ -269,6 +270,7 @@ def create_batch_account(args):
     print('Creating Batch account {}'.format(args.batch_account))
     code, data = call_shell(commands)
     batch_account = parse_create_batch_account_output(code, data)
+    return batch_account
 
 def process_init_command(args):
     aad_user = create_aad_user(args)

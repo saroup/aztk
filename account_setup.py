@@ -25,7 +25,7 @@ class Defaults:
 
 def call_shell(commands):
     command = ' '.join(str(x) for x in commands)
-    cmd = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+    cmd = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).wait()
     returncode = cmd.returncode
     stdout = ''.join(s.decode("utf-8") for s in cmd.stdout)
 
@@ -203,7 +203,7 @@ def create_aad_user(args):
         commands.append('-o')
         commands.append('json')
         aad_user_result_code, aad_user_result_data = call_shell(commands)
-        aad_user = parse_create_sp_user_output(aad_user_result_code, aad_user_result_data)
+        aad_user = parse_sp_user_output(aad_user_result_code, aad_user_result_data)
     return aad_user
 
 def process_init_command(args):

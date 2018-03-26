@@ -122,15 +122,31 @@ def setup_aad_secrets_parser(subparsers):
                             help='Storage account name. Default = ["{}"]'.format(Defaults.storage_account))
 
 def parse_create_sp_user_output(return_code, data):
+    if (return_code > 0):
+        print('There was an error creating the Service Principal. Aborting.\
+        Resource may have been created but will not be charged for unless used.')
+        return None
     return json.loads(data)
 
 def parse_create_resource_group_output(return_code, data):
+    if (return_code > 0):
+        print('There was an error creating the Resource Group. Aborting.\
+        Resource may have been created but will not be charged for unless used.')
+        return None
     return json.loads(data)
 
 def parse_create_storage_account_output(return_code, data):
+    if (return_code > 0):
+        print('There was an error creating the Storage account. Aborting.\
+        Resource may have been created but will not be charged for unless used.')
+        return None
     return json.loads(data)
 
 def parse_create_batch_account_output(return_code, data):
+    if (return_code > 0):
+        print('There was an error creating the Batch account. Aborting.\
+        Resource may have been created but will not be charged for unless used.')
+        return None
     return json.loads(data)
 
 def build_secrets_with_aad(aad_data, batch_data, storage_data):

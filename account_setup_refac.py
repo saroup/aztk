@@ -1,8 +1,9 @@
-### install dependencies
-# required packages:
-# azure-nspkg azure-mgmt-nspkg azure-common azure-cli-core msrestazure azure-graphrbac ...
-
-
+'''
+    Getting Started AZTK script
+'''
+import uuid
+import time
+import yaml
 
 try:
     from azure.common import credentials
@@ -17,7 +18,7 @@ try:
     from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, SkuName, Kind
     from azure.mgmt.subscription import SubscriptionClient
     from azure.graphrbac import GraphRbacManagementClient
-    from azure.graphrbac.models import ServicePrincipalCreateParameters, ApplicationCreateParameters
+    from azure.graphrbac.models import ServicePrincipalCreateParameters, ApplicationCreateParameters, PasswordCredential
     from azure.graphrbac.models.graph_error import GraphErrorException
     from azure.mgmt.network import NetworkManagementClient
     from azure.mgmt.network.models import VirtualNetwork, Subnet, AddressSpace
@@ -38,7 +39,7 @@ except ImportError:
     from azure.mgmt.storage.models import StorageAccountCreateParameters, Sku, SkuName, Kind
     from azure.mgmt.subscription import SubscriptionClient
     from azure.graphrbac import GraphRbacManagementClient
-    from azure.graphrbac.models import ServicePrincipalCreateParameters, ApplicationCreateParameters
+    from azure.graphrbac.models import ServicePrincipalCreateParameters, ApplicationCreateParameters, PasswordCredential
     from azure.graphrbac.models.graph_error import GraphErrorException
     from azure.mgmt.network import NetworkManagementClient
     from azure.mgmt.network.models import VirtualNetwork, Subnet, AddressSpace
@@ -60,6 +61,7 @@ class DefaultSettings():
     virtual_network_name = "aztkvnet" + iteration
     subnet_name = 'aztksubnet' + iteration
     application_name = 'aztkapplication' + iteration
+    application_credential_name = 'aztkapplicationcredential' + iteration
     service_principal = 'aztksp' + iteration
     region = 'brazilsouth'
 
@@ -148,7 +150,7 @@ def create_vnet(credentials, subscription_id, **kwargs):
             address_space=AddressSpace(["10.0.0.0/24"])
         )
     )
-    # virtual_network.result()
+    virtual_network = virtual_network.result()
     subnet = network_client.subnets.create_or_update(
         resource_group_name=kwargs.get("resource_group", DefaultSettings.resource_group),
         virtual_network_name=kwargs.get("virtual_network_name", DefaultSettings.virtual_network_name),
@@ -157,42 +159,57 @@ def create_vnet(credentials, subscription_id, **kwargs):
             address_prefix='10.0.0.0/24'
         )
     )
-    return virtual_network.result().id, subnet.result().id
+    return subnet.result().id
 
 
 def create_aad_user(credentials, tenant_id, **kwargs):
+    """
+        Create an AAD application and service principal
+        :param credentials: msrestazure.azure_active_directory.AdalAuthentication
+        :param tenant_id: str
+        :param **application_name: str
+    """
     graph_rbac_client = GraphRbacManagementClient(
         credentials,
         tenant_id,
         base_url=AZURE_PUBLIC_CLOUD.endpoints.active_directory_graph_resource_id
     )
-    # try:
+    from datetime import datetime, timezone, MAXYEAR
+    application_credential = uuid.uuid4()
     application = graph_rbac_client.applications.create(
         parameters=ApplicationCreateParameters(
             available_to_other_tenants=False,
             identifier_uris=["http://aztk.com"],
-            display_name=kwargs.get("application_name", DefaultSettings.application_name)
+            display_name=kwargs.get("application_name", DefaultSettings.application_name),
+            password_credentials=[
+                PasswordCredential(
+                    end_date=datetime(2299, 12, 31, 0, 0, 0, 0, tzinfo=timezone.utc),
+                    value=application_credential,
+                    key_id=uuid.uuid4()
+                )
+            ]
         )
     )
+
     service_principal = graph_rbac_client.service_principals.create(
         ServicePrincipalCreateParameters(
             app_id=application.app_id,
             account_enabled=True
         )
     )
-    # except GraphErrorException:
-    #     pass
 
-    return application.app_id, service_principal, application.object_id
+    return application.app_id, service_principal.object_id, str(application_credential)
 
 
 def create_role_assignment(credentials, subscription_id, scope, principal_id):
+    """
+        Gives service principal contributor role authorization on scope
+        :param credentials: msrestazure.azure_active_directory.AdalAuthentication
+        :param subscription_id: str
+        :param scope: str
+        :param principal_id: str
+    """
     authorization_client = AuthorizationManagementClient(credentials, subscription_id)
-    # role_defs = [role_def for role_def in authorization_client.role_definitions.list(scope=scope, ]
-    # [print(role_def.id) for role_def in role_defs if role_def.properties.role_name == "Contributor"]
-    # contributor_role_def_id = authorization_client.role_definitions.get(scope="/", role_definition_id="Contributor").id
-    # print(contributor_role_def_id)
-    # Get "Contributor" built-in role as a RoleDefinition object
     role_name = 'Contributor'
     roles = list(authorization_client.role_definitions.list(
         scope,
@@ -200,22 +217,26 @@ def create_role_assignment(credentials, subscription_id, scope, principal_id):
     ))
     assert len(roles) == 1
     contributor_role = roles[0]
-    print(principal_id)
-    print(contributor_role)
-
-    import uuid
-    authorization_client.role_assignments.create(
-        scope,
-        uuid.uuid4(),
-        {
-            'role_definition_id': contributor_role.id,
-            'principal_id': principal_id
-        }
-    )
+    for i in range(10):
+        try:
+            authorization_client.role_assignments.create(
+                scope,
+                uuid.uuid4(),
+                {
+                    'role_definition_id': contributor_role.id,
+                    'principal_id': principal_id
+                }
+            )
+            break
+        except CloudError as e:
+            # ignore error if service principal has not yet been created
+            time.sleep(1)
+            if 1 == 10:
+                raise e
 
 
 def format_secrets(**kwargs):
-    pass
+    return yaml.dump(kwargs, default_flow_style=False)
 
 
 def prompt_with_default(key, value):
@@ -224,6 +245,7 @@ def prompt_with_default(key, value):
         return user_value
     else:
         return value
+
 
 if __name__ == "__main__":
     # get credentials and tenant_id
@@ -242,20 +264,40 @@ if __name__ == "__main__":
     storage_account_id = create_storage_account(creds, subscription_id)
 
     # create batch account
-    create_batch_account(creds, subscription_id, **{'storage_account_id': storage_account_id})
+    batch_account_id = create_batch_account(creds, subscription_id, **{'storage_account_id': storage_account_id})
 
-    # create vnet
-    create_vnet(creds, subscription_id)
+    # create vnet with a subnet
+    subnet_id = create_vnet(creds, subscription_id)
 
     # create AAD application and service principal
     profile = credentials.get_cli_profile()
-    aad_cred, _, tenant_id = profile.get_login_credentials(
+    aad_cred, subscirption_id, tenant_id = profile.get_login_credentials(
         resource=AZURE_PUBLIC_CLOUD.endpoints.active_directory_graph_resource_id
     )
 
-    application_id, service_principal, application_object_id = create_aad_user(aad_cred, tenant_id)
-    print(dir(service_principal))
-    print("SERVICE_PRINCIPAL app_id:", service_principal.app_id)
-    print("SERVICE_PRINCIPAL add props:", service_principal.additional_properties)
-    service_principal_object_id = service_principal.object_id
+    application_id, service_principal_object_id, application_credential = create_aad_user(aad_cred, tenant_id)
+
     create_role_assignment(creds, subscription_id, resource_group_id, service_principal_object_id)
+
+    secrets = format_secrets(
+        **{
+            "tenant_id": tenant_id,
+            "client_id": application_id,
+            "credential": application_credential,
+            "subnet_id": subnet_id,
+            "batch_account_resource_id": batch_account_id,
+            "storage_account_resource_id": storage_account_id
+        }
+    )
+    print(secrets)
+
+
+
+'''
+service_principal:
+    tenant_id: <AAD Diretory ID>
+    client_id: <AAD App Application ID>
+    credential: <AAD App Password>
+    batch_account_resource_id: </batch/account/resource/id>
+    storage_account_resource_id: </storage/account/resource/id>
+'''

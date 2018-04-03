@@ -4,6 +4,7 @@
 import uuid
 import time
 import yaml
+from datetime import datetime, timezone, MAXYEAR
 
 try:
     from azure.common import credentials
@@ -49,8 +50,7 @@ except ImportError:
 
 
 class AccountSetupError(Exception):
-    def __init__(self, message: str = None):
-        super().__init__(message)
+    pass
 
 
 class DefaultSettings():
@@ -58,7 +58,7 @@ class DefaultSettings():
     resource_group = 'aztk' + iteration
     storage_account = 'aztkstorage' + iteration
     batch_account = 'aztkbatch' + iteration
-    virtual_network_name = "aztkvnet" + iteration
+    virtual_network_name = "badaztkvnet" + iteration
     subnet_name = 'aztksubnet' + iteration
     application_name = 'aztkapplication' + iteration
     application_credential_name = 'aztkapplicationcredential' + iteration
@@ -142,8 +142,30 @@ def create_vnet(credentials, subscription_id, **kwargs):
         :param **region: str
     """
     network_client = NetworkManagementClient(credentials, subscription_id)
+    resource_group_name = kwargs.get("resource_group", DefaultSettings.resource_group)
+    virtual_network_name = kwargs.get("virtual_network_name", DefaultSettings.virtual_network_name)
+    subnet_name = kwargs.get("subnet_name", DefaultSettings.subnet_name)
+    # get vnet, and subnet if they exist
+    virtual_network = subnet = None
+    try:
+        virtual_network = network_client.virtual_networks.get(
+            resource_group_name=resource_group_name,
+            virtual_network_name=virtual_network_name,
+        )
+    except CloudError as e:
+        pass
+
+    if virtual_network:
+        confirmation = input("A virtual network with the same name ({}) was found. \n"\
+                             "Please note that the existing address space and subnets may be changed or destroyed. \n"\
+                             "Do you want to use this virtual network? (y/n): ".format(virtual_network_name))
+        if confirmation == "n":
+            raise AccountSetupError("Virtual network already exists, not recreating.")
+        elif confirmation != "y":
+            raise AccountSetupError("Input not recognized, please try again.")
+
     virtual_network = network_client.virtual_networks.create_or_update(
-        resource_group_name=kwargs.get("resource_group", DefaultSettings.resource_group),
+        resource_group_name=resource_group_name,
         virtual_network_name=kwargs.get("virtual_network_name", DefaultSettings.virtual_network_name),
         parameters=VirtualNetwork(
             location=kwargs.get("region", DefaultSettings.region),
@@ -152,9 +174,9 @@ def create_vnet(credentials, subscription_id, **kwargs):
     )
     virtual_network = virtual_network.result()
     subnet = network_client.subnets.create_or_update(
-        resource_group_name=kwargs.get("resource_group", DefaultSettings.resource_group),
-        virtual_network_name=kwargs.get("virtual_network_name", DefaultSettings.virtual_network_name),
-        subnet_name=kwargs.get("subnet_name", DefaultSettings.subnet_name),
+        resource_group_name=resource_group_name,
+        virtual_network_name=virtual_network_name,
+        subnet_name=subnet_name,
         subnet_parameters=Subnet(
             address_prefix='10.0.0.0/24'
         )
@@ -174,29 +196,45 @@ def create_aad_user(credentials, tenant_id, **kwargs):
         tenant_id,
         base_url=AZURE_PUBLIC_CLOUD.endpoints.active_directory_graph_resource_id
     )
-    from datetime import datetime, timezone, MAXYEAR
     application_credential = uuid.uuid4()
-    application = graph_rbac_client.applications.create(
-        parameters=ApplicationCreateParameters(
-            available_to_other_tenants=False,
-            identifier_uris=["http://aztk.com"],
-            display_name=kwargs.get("application_name", DefaultSettings.application_name),
-            password_credentials=[
-                PasswordCredential(
-                    end_date=datetime(2299, 12, 31, 0, 0, 0, 0, tzinfo=timezone.utc),
-                    value=application_credential,
-                    key_id=uuid.uuid4()
-                )
-            ]
+    try:
+        display_name = kwargs.get("application_name", DefaultSettings.application_name)
+        application = graph_rbac_client.applications.create(
+            parameters=ApplicationCreateParameters(
+                available_to_other_tenants=False,
+                identifier_uris=["http://{}.com".format(display_name)],
+                display_name=display_name,
+                password_credentials=[
+                    PasswordCredential(
+                        end_date=datetime(2299, 12, 31, 0, 0, 0, 0, tzinfo=timezone.utc),
+                        value=application_credential,
+                        key_id=uuid.uuid4()
+                    )
+                ]
+            )
         )
-    )
+        service_principal = graph_rbac_client.service_principals.create(
+            ServicePrincipalCreateParameters(
+                app_id=application.app_id,
+                account_enabled=True
+            )
+        )
+    except GraphErrorException as e:
+        if e.inner_exception.code == "Request_BadRequest":
+            application = next(graph_rbac_client.applications.list(
+                filter="identifierUris/any(c:c eq 'http://{}.com')".format(display_name)))
+            confirmation_str = "Previously created application with name {} found. "\
+                               "Would you like to use it? (y/n): ".format(application.display_name)
+            response = input(confirmation_str).lower()
+            if response == "n":
+                raise e
+            elif response != "y":
+                raise ValueError("Response not recognized. Please try again.")
 
-    service_principal = graph_rbac_client.service_principals.create(
-        ServicePrincipalCreateParameters(
-            app_id=application.app_id,
-            account_enabled=True
-        )
-    )
+            service_principal = next(graph_rbac_client.service_principals.list(
+                filter="appId eq '{}'".format(application.app_id)))
+        else:
+            raise e
 
     return application.app_id, service_principal.object_id, str(application_credential)
 
@@ -215,7 +253,7 @@ def create_role_assignment(credentials, subscription_id, scope, principal_id):
         scope,
         filter="roleName eq '{}'".format(role_name)
     ))
-    assert len(roles) == 1
+    # assert len(roles) == 1
     contributor_role = roles[0]
     for i in range(10):
         try:
@@ -231,12 +269,24 @@ def create_role_assignment(credentials, subscription_id, scope, principal_id):
         except CloudError as e:
             # ignore error if service principal has not yet been created
             time.sleep(1)
-            if 1 == 10:
+            if i == 10:
                 raise e
 
 
 def format_secrets(**kwargs):
-    return yaml.dump(kwargs, default_flow_style=False)
+    '''
+    Retuns the secrets for the created resources to be placed in secrets.yaml
+    The following form is returned:
+
+        service_principal:
+            tenant_id: <AAD Diretory ID>
+            client_id: <AAD App Application ID>
+            credential: <AAD App Password>
+            batch_account_resource_id: </batch/account/resource/id>
+            storage_account_resource_id: </storage/account/resource/id>
+    '''
+
+    return yaml.dump({"service_principal": kwargs}, default_flow_style=False)
 
 
 def prompt_with_default(key, value):
@@ -267,7 +317,7 @@ if __name__ == "__main__":
     batch_account_id = create_batch_account(creds, subscription_id, **{'storage_account_id': storage_account_id})
 
     # create vnet with a subnet
-    subnet_id = create_vnet(creds, subscription_id)
+    # subnet_id = create_vnet(creds, subscription_id)
 
     # create AAD application and service principal
     profile = credentials.get_cli_profile()
@@ -284,20 +334,9 @@ if __name__ == "__main__":
             "tenant_id": tenant_id,
             "client_id": application_id,
             "credential": application_credential,
-            "subnet_id": subnet_id,
+            # "subnet_id": subnet_id,
             "batch_account_resource_id": batch_account_id,
             "storage_account_resource_id": storage_account_id
         }
     )
-    print(secrets)
-
-
-
-'''
-service_principal:
-    tenant_id: <AAD Diretory ID>
-    client_id: <AAD App Application ID>
-    credential: <AAD App Password>
-    batch_account_resource_id: </batch/account/resource/id>
-    storage_account_resource_id: </storage/account/resource/id>
-'''
+    print("\n# Copy the following into your .aztk/secrets.yaml file\n", secrets)
